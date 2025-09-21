@@ -1,0 +1,11 @@
+[package]
+name = "relm-sandbox"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+gtk = { version = "0.10.0", package = "gtk4", features = ["v4_12"] }
+relm4 = { version = "0.10.0", features = ["gnome_47"] }
+relm4-components = { version = "0.10.0", features = [] }
+reqwest = "0.12.23"
+tokio = { version = "1.47.1", features = ["full"] }
