@@ -4,6 +4,7 @@ use std::time::Duration;
 use gtk::prelude::{BoxExt as _, ButtonExt, GtkWindowExt as _, OrientableExt};
 use relm4::{ComponentParts, ComponentSender, RelmApp, RelmWidgetExt as _, SimpleComponent, view};
 use relm4::{factory, prelude::*};
+use tokio::select;
 
 struct AppModel {
     progresses: BTreeMap<u64, f32>,
@@ -20,6 +21,29 @@ enum AppMsg {
 enum AppMsgCmd {
     SetProgress(u64, f32),
     DeleteProgressBar(u64),
+}
+
+impl AppModel {
+    fn get_bars(&self) -> Vec<MyBar> {
+        self.progresses
+            .iter()
+            .map(|(_, v)| MyBar { value: *v as f64 })
+            .collect()
+    }
+
+    fn sync_factories(&mut self) {
+        let d = self.get_bars();
+        let mut g = self.progs_fac.guard();
+        for i in 0..d.len().min(g.len()) {
+            g[i] = d[i].clone();
+        }
+        while g.len() > d.len() {
+            g.pop_front();
+        }
+        for i in g.len()..d.len() {
+            g.push_back(d[i].clone());
+        }
+    }
 }
 
 #[relm4::component]
@@ -42,7 +66,8 @@ impl Component for AppModel {
                 set_expand: true,
 
                 gtk::Button {
-                    set_label: "Add Pb",
+                    #[watch]
+                    set_label: &format!("Add Pb ({} running)", model.progresses.len()),
                     connect_clicked => AppMsg::AddProgressBar
                 },
 
@@ -80,28 +105,32 @@ impl Component for AppModel {
     fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
         match message {
             AppMsg::AddProgressBar => {
-                for _ in 0..10 {
+                for _ in 0..20 {
                     self.last_pb_id += 1;
                     let id = self.last_pb_id;
-                    sender.command(move |sender, _shutdown| async move {
+                    sender.command(move |sender, shutdown| async move {
                         let count = 1000;
-                        let mut int = relm4::tokio::time::interval(Duration::from_millis(10));
-                        for i in 0..count {
-                            sender
-                                .send(AppMsgCmd::SetProgress(id, i as f32 / count as f32))
-                                .unwrap();
-                            int.tick().await;
+                        let mut int = relm4::tokio::time::interval(Duration::from_millis(
+                            rand::random_range(5..40),
+                        ));
+                        let job = async {
+                            for i in 0..count {
+                                sender
+                                    .send(AppMsgCmd::SetProgress(id, i as f32 / count as f32))
+                                    .unwrap();
+                                int.tick().await;
+                            }
+                            sender.send(AppMsgCmd::DeleteProgressBar(id)).unwrap();
+                        };
+                        select! {
+                            _ = job => {},
+                            _ = shutdown.wait() => {}
                         }
-                        sender.send(AppMsgCmd::DeleteProgressBar(id)).unwrap();
                     });
                 }
             }
         }
-        let mut g = self.progs_fac.guard();
-        g.clear();
-        for (_, val) in &self.progresses {
-            g.push_back(MyBar { value: *val as f64 });
-        }
+        self.sync_factories();
     }
 
     fn update_cmd(
@@ -118,14 +147,11 @@ impl Component for AppModel {
                 self.progresses.remove(&id);
             }
         }
-        let mut g = self.progs_fac.guard();
-        g.clear();
-        for (_, val) in &self.progresses {
-            g.push_back(MyBar { value: *val as f64 });
-        }
+        self.sync_factories();
     }
 }
 
+#[derive(PartialEq, Clone)]
 struct MyBar {
     value: f64,
 }
@@ -144,7 +170,8 @@ impl FactoryComponent for MyBar {
             gtk::ProgressBar {
                 #[watch]
                 set_fraction: self.value,
-                set_margin_all: 10
+                set_margin_all: 10,
+                set_expand: true
             }
         }
     }
